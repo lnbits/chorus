@@ -1,0 +1,110 @@
+name: Linux release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: linux-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 90
+    env:
+      # AppImage build tools can extract themselves on runners without FUSE.
+      APPIMAGE_EXTRACT_AND_RUN: '1'
+      # Avoid filling the runner disk with debug symbols before release builds.
+      CARGO_PROFILE_DEV_DEBUG: '0'
+      CARGO_PROFILE_TEST_DEBUG: '0'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Validate release version
+        id: version
+        env:
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          if [[ "$REF_TYPE" == tag ]]; then
+            version="$(python3 scripts/check-release-version.py "$REF_NAME")"
+          else
+            version="$(python3 scripts/check-release-version.py)"
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+      - uses: dtolnay/rust-toolchain@1.98.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: apps/web/package-lock.json
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            . -> target
+            apps/desktop -> target
+      - name: Install Linux build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file patchelf libxdo-dev libssl-dev librsvg2-dev libayatana-appindicator3-dev
+      - run: npm ci --prefix apps/web
+      - run: npm run check --prefix apps/web
+      - run: npm run lint --prefix apps/web
+      - run: cargo test --locked --workspace
+      - name: Build AppImage and server archive
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: bash scripts/package-linux.sh "v$VERSION"
+      - name: Test packaged node and web assets
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          python3 scripts/test-linux-package.py "dist/chorus-${VERSION}-linux-x86_64.tar.gz"
+          mkdir -p "$RUNNER_TEMP/chorus-appimage"
+          cd "$RUNNER_TEMP/chorus-appimage"
+          "$GITHUB_WORKSPACE/dist/Chorus_${VERSION}_amd64.AppImage" --appimage-extract > /dev/null
+          test -x squashfs-root/usr/bin/chorus-desktop
+          test -x squashfs-root/usr/bin/chorus-node
+          test -s squashfs-root/usr/lib/Chorus/web/index.html
+          squashfs-root/usr/bin/chorus-node --version
+      - uses: actions/upload-artifact@v4
+        with:
+          name: chorus-linux-release
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 14
+
+  publish:
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: chorus-linux-release
+          path: dist
+      - name: Verify checksums
+        working-directory: dist
+        run: sha256sum --check SHA256SUMS
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          options=()
+          if [[ "$RELEASE_TAG" == *-* ]]; then options+=(--prerelease); fi
+          gh release create "$RELEASE_TAG" dist/* \
+            --verify-tag --title "Chorus $RELEASE_TAG" --generate-notes \
+            --notes 'Linux x86_64 packages built on Ubuntu 22.04. Download the AppImage for desktop use, or the server archive for a VPS. Verify downloads with SHA256SUMS. Chorus remains pre-production; see docs/security-review.md in the source or server archive.' \
+            "${options[@]}"

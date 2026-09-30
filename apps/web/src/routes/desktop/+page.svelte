@@ -9,6 +9,8 @@
   let adminPassword = $state('');
   let password = $state('');
   let confirmation = $state('');
+  let identityMode = $state('generate');
+  let nsec = $state('');
   onMount(async () => {
     try {
       exists = await invoke<boolean>('initialized');
@@ -24,7 +26,13 @@
     try {
       if (!exists) {
         if (password !== confirmation) throw new Error('Keystore passwords do not match.');
-        await invoke('initialize', { username, adminPassword, keyPassword: password });
+        await invoke('initialize', {
+          username,
+          adminPassword,
+          keyPassword: password,
+          nsec: identityMode === 'import' ? nsec : null
+        });
+        nsec = '';
         exists = true;
         adminPassword = '';
         confirmation = '';
@@ -45,13 +53,34 @@
   <p class="muted">
     {exists
       ? 'Unlock the encrypted keystore to start your local federation node.'
-      : 'Your admin account and two Nostr identities are created locally. Keep your keystore password somewhere safe.'}
+      : 'Set up your admin account and one Nostr identity for all your federations. Keep your keystore password somewhere safe.'}
   </p>
   {#if error}<div class="notice error" role="alert">{error}</div>{/if}{#if ready}<form
       onsubmit={start}
       class="panel"
     >
       <div class="panel-body">
+        {#if !exists}<label
+            >NOSTR IDENTITY<select bind:value={identityMode}
+              ><option value="generate">Generate a new key</option><option value="import"
+                >Import my nsec</option
+              ></select
+            ></label
+          >
+          {#if identityMode === 'import'}<label
+              >NOSTR NSEC<input
+                type="password"
+                bind:value={nsec}
+                autocomplete="off"
+                spellcheck={false}
+                placeholder="nsec1…"
+                required
+              />
+              <p class="field-help">
+                Encrypted in your local keystore. Used for signing and private messages across your
+                federations.
+              </p></label
+            >{/if}{/if}
         {#if !exists}<label
             >ADMIN USERNAME<input bind:value={username} autocomplete="username" required /></label
           ><label

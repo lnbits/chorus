@@ -92,6 +92,12 @@ test('real node: login, create, execute, export proof and independently verify',
   await page.goto('/settings');
   await expect(page.getByRole('heading', { name: 'Keys stay on your node.' })).toBeVisible();
   await page.screenshot({ path: '/tmp/chorus-settings-desktop.png', fullPage: true });
+  await page.getByRole('button', { name: 'Nostr', exact: true }).click();
+  await expect(page.getByRole('heading', { name: 'Your Nostr identity' })).toBeVisible();
+  const identity = await (await page.request.get('/api/v1/settings')).json();
+  expect(identity.identity_npub).toBe(identity.member_npub);
+  expect(identity.identity_npub).toBe(identity.node_npub);
+  await expect(page.getByText(identity.identity_npub, { exact: true })).toHaveCount(1);
   // Authenticated cookies alone cannot authorize writes.
   const csrf = await page.request.post('/api/v1/settings/relays', { data: [] });
   expect(csrf.ok()).toBe(false);

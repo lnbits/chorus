@@ -18,7 +18,7 @@ The JSON API is never hashed as a substitute for this encoding. Inner Nostr even
 
 Genesis pins a random federation ID, epoch zero, initial members, threshold, approved WASM, VM version, optional initial execution state, relay set and privacy. A genesis member signs it. Genesis is a **trust anchor**, not proof of pre-existing collective approval. Every joining user must independently pin the exact genesis state hash. A matching federation name, ID or relay advertisement is insufficient.
 
-Joining imports verified state and bytes locally. It does not enroll the local node as a member. The existing federation approves enrollment through an epoch transition. Member Nostr keys authorize federation votes; separate communication keys address private envelopes. Private federations require a complete signed mapping for their member set.
+Joining imports verified state and bytes locally. It does not enroll the local node as a member. The existing federation approves enrollment through an epoch transition. Each node uses one Nostr identity for federation votes and private envelopes. New states automatically map each member to its own npub. The canonical `communication_keys` field is retained so historical two-key states and their signatures remain verifiable. Changing an existing mapping requires a governance-certified epoch.
 
 An epoch change is a proposal for the complete successor state. Its parent hash must match, epoch must increment by one, initial execution state is immutable, and all fields are validated. Approval commits to protocol, federation, old epoch, parent hash and proposal hash. Unique old members must reach the **old rule**, including when reducing a threshold, removing members or changing the contract. Historical states and signatures are immutable. Membership/threshold changes invalidate old FROST configuration unless a fresh setup is supplied.
 
@@ -56,7 +56,9 @@ Experimental regular event kinds, not replaceable events:
 
 The signed `h` tag contains the federation ID; `protocol=chorus/1` identifies this protocol. Filters use `#h`. The engine verifies payload bindings independently of filtering. Duplicate event IDs are persisted and ignored. The SDK reconnects across multiple relays. The node performs bounded backfills and retries its outbox.
 
-Private transport encrypts the complete inner member-signed event using NIP-17/NIP-59 and NIP-44 via the maintained Nostr implementation. Recipients are the epoch's communication keys. Private envelopes are never sent as bare public inner events. Content encryption does not hide all metadata or protect data from authorized members, the local OS or unencrypted SQLite backups.
+Private transport encrypts the complete inner member-signed event using NIP-17/NIP-59 and NIP-44 via the maintained Nostr implementation. Recipients follow the epoch's signed routing map; in new federations each recipient is the member's own npub. Private envelopes are never sent as bare public inner events. Content encryption does not hide all metadata or protect data from authorized members, the local OS or unencrypted SQLite backups.
+
+Recipient kind-10050 inbox relay discovery is not yet implemented; private envelopes use configured node relays. This implements the NIP-17 encrypted format, not complete NIP-17 routing compliance.
 
 Backfill is currently capped at 5,000 events per query and does not have a complete archival pagination cursor. Private envelopes randomize timestamps and are retried in bounded dependency passes. Contract upgrades require each member to import the exact approved bytes out of band. These are explicit deployment limits, not guarantees of unlimited resynchronization.
 

@@ -1,14 +1,13 @@
 use anyhow::{Context, Result, ensure};
 use chorus_api::{Api, engine::Engine};
 use chorus_nostr::{RelayConfig, Transport, default_relays};
-use chorus_storage::{Storage, seal, unseal};
+use chorus_storage::{
+    Storage, initialize_identity, load_identity, load_legacy_inbox, lock_node, replace_identity,
+};
 use clap::{Parser, Subcommand};
 use nostr_sdk::prelude::*;
 use serde::Deserialize;
-use std::{
-    net::SocketAddr,
-    path::{Path, PathBuf},
-};
+use std::{net::SocketAddr, path::PathBuf};
 use zeroize::Zeroizing;
 
 #[derive(Parser)]
@@ -27,13 +26,16 @@ struct Cli {
 }
 #[derive(Subcommand)]
 enum Command {
-    /// Create independent admin, communication and member identities. Passwords are prompted without echo.
+    /// Create an admin account and one Nostr identity. Passwords are prompted without echo.
     Init {
         #[arg(long, default_value = "admin")]
         username: String,
         /// Read {"admin_password":...,"key_password":...} from a protected pipe.
         #[arg(long)]
         credentials_stdin: bool,
+        /// Import an existing nsec using a non-echoed terminal prompt.
+        #[arg(long, conflicts_with = "credentials_stdin")]
+        import_nsec: bool,
     },
     /// Start the headless node and optionally serve the built SvelteKit UI.
     Serve {
@@ -48,7 +50,16 @@ enum Command {
         #[arg(long, hide = true)]
         key_password_stdin: bool,
     },
-    /// Print public identities; private material is never returned by this command.
+    /// Replace the local identity after stopping the node; retains an encrypted backup.
+    ReplaceKey {
+        /// Read {"key_password":...,"nsec":...} from a protected pipe.
+        #[arg(long)]
+        credentials_stdin: bool,
+        /// Proceed even if federations still list the old identity as a member.
+        #[arg(long)]
+        allow_membership_loss: bool,
+    },
+    /// Print the public Nostr identity; private material is never returned by this command.
     Identity,
 }
 #[derive(Default, Deserialize)]
@@ -58,25 +69,6 @@ struct Config {
     web_root: Option<String>,
     key_password_file: Option<PathBuf>,
     session_ttl: Option<u64>,
-}
-fn private_write(path: &Path, bytes: &[u8]) -> Result<()> {
-    use std::io::Write;
-    let mut opts = std::fs::OpenOptions::new();
-    opts.write(true).create_new(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        opts.mode(0o600);
-    }
-    let mut f = opts.open(path)?;
-    f.write_all(bytes)?;
-    f.sync_all()?;
-    Ok(())
-}
-fn load_keys(dir: &Path, password: &str, purpose: &str) -> Result<Keys> {
-    let blob = std::fs::read(dir.join(format!("{purpose}.vault")))?;
-    let bytes = unseal(&blob, password, purpose)?;
-    Ok(Keys::new(SecretKey::from_slice(&bytes)?))
 }
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -102,23 +94,31 @@ async fn main() -> Result<()> {
         use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(&cli.data_dir, std::fs::Permissions::from_mode(0o700))?;
     }
+    let _node_lock = if matches!(cli.command, Command::Identity) {
+        None
+    } else {
+        Some(lock_node(&cli.data_dir)?)
+    };
     let db = Storage::open(cli.data_dir.join("chorus.sqlite"))?;
     match cli.command {
         Command::Init {
             username,
             credentials_stdin,
+            import_nsec,
         } => {
             ensure!(db.admin().is_err(), "node already initialized");
             ensure!(
                 !username.is_empty() && username.len() <= 64,
                 "invalid username"
             );
-            let (password, key_password) = if credentials_stdin {
+            let (password, key_password, nsec) = if credentials_stdin {
                 use std::io::Read;
                 #[derive(Deserialize)]
                 struct Credentials {
                     admin_password: String,
                     key_password: String,
+                    #[serde(default)]
+                    nsec: Option<String>,
                 }
                 let mut input = Zeroizing::new(String::new());
                 std::io::stdin().take(4097).read_to_string(&mut input)?;
@@ -127,6 +127,7 @@ async fn main() -> Result<()> {
                 (
                     Zeroizing::new(c.admin_password),
                     Zeroizing::new(c.key_password),
+                    c.nsec.map(Zeroizing::new),
                 )
             } else {
                 let password = Zeroizing::new(rpassword::prompt_password(
@@ -140,35 +141,89 @@ async fn main() -> Result<()> {
                     Zeroizing::new(rpassword::prompt_password(
                         "Keystore password (12+ characters): ",
                     )?),
+                    if import_nsec {
+                        Some(Zeroizing::new(rpassword::prompt_password("Nostr nsec: ")?))
+                    } else {
+                        None
+                    },
                 )
             };
             chorus_storage::password_hash(&password)?;
             ensure!(key_password.len() >= 12, "keystore password too short");
-            for purpose in ["communication", "member"] {
-                let keys = Keys::generate();
-                let secret = Zeroizing::new(keys.secret_key().to_secret_bytes());
-                private_write(
-                    &cli.data_dir.join(format!("{purpose}.vault")),
-                    &seal(secret.as_ref(), &key_password, purpose)?,
-                )?;
-                db.set_setting(
-                    &format!("{purpose}_public_key"),
-                    &keys.public_key().to_hex(),
-                )?;
-            }
+            let identity = initialize_identity(
+                &cli.data_dir,
+                &key_password,
+                nsec.as_ref().map(|s| s.as_str()),
+            )?;
+            db.set_setting("member_public_key", &identity.public_key().to_hex())?;
             db.init_admin(&username, &password)?;
             db.set_setting("relays", &default_relays())?;
             println!(
                 "Node initialized with six read/write relays. Manage them in Settings after login."
             );
         }
-        Command::Identity => {
-            for purpose in ["communication", "member"] {
-                let key: String = db
-                    .setting(&format!("{purpose}_public_key"))?
-                    .context("node is not initialized")?;
-                println!("{purpose}: {}", PublicKey::from_hex(&key)?.to_bech32()?);
+        Command::ReplaceKey {
+            credentials_stdin,
+            allow_membership_loss,
+        } => {
+            db.admin()
+                .context("initialize this node before replacing its key")?;
+            let (password, nsec) = if credentials_stdin {
+                use std::io::Read;
+                #[derive(Deserialize)]
+                struct Credentials {
+                    key_password: String,
+                    nsec: String,
+                }
+                let mut input = Zeroizing::new(String::new());
+                std::io::stdin().take(4097).read_to_string(&mut input)?;
+                ensure!(input.len() <= 4096, "credential input exceeds limit");
+                let c: Credentials = serde_json::from_str(&input)?;
+                (Zeroizing::new(c.key_password), Zeroizing::new(c.nsec))
+            } else {
+                (
+                    Zeroizing::new(rpassword::prompt_password("Keystore password: ")?),
+                    Zeroizing::new(rpassword::prompt_password("Replacement Nostr nsec: ")?),
+                )
+            };
+            let old = load_identity(&cli.data_dir, &password)?;
+            let replacement = SecretKey::from_bech32(nsec.trim())
+                .map_err(|_| anyhow::anyhow!("invalid Nostr nsec"))?;
+            let new_public = Keys::new(replacement).public_key();
+            ensure!(
+                new_public != old.public_key(),
+                "this nsec is already the active identity"
+            );
+            let mut latest = std::collections::BTreeMap::new();
+            for record in db.list::<chorus_api::engine::EpochRecord>("epoch", None)? {
+                let entry = latest
+                    .entry(record.state.federation_id.clone())
+                    .or_insert(record.state.clone());
+                if record.state.epoch > entry.epoch {
+                    *entry = record.state;
+                }
             }
+            let affected = latest
+                .values()
+                .filter(|s| s.members.contains(&old.public_key().to_hex()))
+                .count();
+            ensure!(
+                affected == 0 || allow_membership_loss,
+                "the current identity is still a member of {affected} federation(s). Arrange admission of the new npub and removal of the old npub through governance, or explicitly use --allow-membership-loss to switch anyway. Proposed npub: {}",
+                new_public.to_bech32()?
+            );
+            let (identity, backup) = replace_identity(&cli.data_dir, &password, &nsec)?;
+            db.set_setting("member_public_key", &identity.public_key().to_hex())?;
+            db.activity("identity_changed", None, "settings", "Local Nostr identity replaced; encrypted backup retained and federation history preserved")?;
+            println!("Identity: {}", identity.public_key().to_bech32()?);
+            println!("Encrypted previous-key backup: {}", backup.display());
+            println!("Federation membership and signing history were not changed.");
+        }
+        Command::Identity => {
+            let key: String = db
+                .setting("member_public_key")?
+                .context("node is not initialized")?;
+            println!("identity: {}", PublicKey::from_hex(&key)?.to_bech32()?);
         }
         Command::Serve {
             bind,
@@ -204,20 +259,17 @@ async fn main() -> Result<()> {
             } else {
                 Zeroizing::new(rpassword::prompt_password("Keystore password: ")?)
             };
-            let communication = load_keys(&cli.data_dir, &password, "communication")?;
-            let member = load_keys(&cli.data_dir, &password, "member")?;
+            let identity = load_identity(&cli.data_dir, &password)?;
+            // Recover public metadata if a previous key replacement was interrupted after rename.
+            db.set_setting("member_public_key", &identity.public_key().to_hex())?;
+            let legacy_inbox = load_legacy_inbox(&cli.data_dir, &password)?;
             drop(password);
             let relays = db
                 .setting::<Vec<RelayConfig>>("relays")?
                 .unwrap_or_else(default_relays);
-            let transport = Transport::new(communication.clone(), &relays).await?;
-            let engine = Engine::new(
-                db.clone(),
-                chorus_fedvm::FedVm::new()?,
-                member,
-                communication.public_key(),
-                transport,
-            );
+            let transport =
+                Transport::with_legacy_inbox(identity.clone(), legacy_inbox, &relays).await?;
+            let engine = Engine::new(db.clone(), chorus_fedvm::FedVm::new()?, identity, transport)?;
             // Validate complete authenticated history on restart, not just a mutable head pointer.
             for state in engine.states()? {
                 let invitation = engine.invitation(&state.federation_id)?;

@@ -35,7 +35,6 @@
   let relays = $state('');
   let initialState = $state('');
   let stateful = $state(false);
-  let communicationKeys = $state('');
   let invitation = $state('');
   let genesisHash = $state('');
   const visible = $derived(
@@ -61,8 +60,8 @@
     modal = 'create';
     formError = '';
     try {
-      const s = await api<{ member_npub: string; relays: { url: string }[] }>('/settings');
-      if (!members) members = s.member_npub;
+      const s = await api<{ identity_npub: string; relays: { url: string }[] }>('/settings');
+      if (!members) members = s.identity_npub;
       if (!relays) relays = s.relays.map((r) => r.url).join('\n');
     } catch (e) {
       formError = errorMessage(e);
@@ -82,11 +81,6 @@
     busy = true;
     formError = '';
     try {
-      const pairs = communicationKeys
-        .split('\n')
-        .map((s) => s.trim())
-        .filter(Boolean)
-        .map((s) => s.split(/\s+/));
       const result = await api<Federation>('/federations', {
         method: 'POST',
         body: JSON.stringify({
@@ -100,8 +94,7 @@
           },
           wasm_hex: wasmHex,
           relays: relays.split(/[\s,]+/).filter(Boolean),
-          initial_state_hex: stateful ? hex(new TextEncoder().encode(initialState)) : null,
-          communication_keys: pairs
+          initial_state_hex: stateful ? hex(new TextEncoder().encode(initialState)) : null
         })
       });
       modal = null;
@@ -292,8 +285,8 @@
       ><label class="wide"
         >INITIAL MEMBER NPUBS<textarea rows="3" class="mono" bind:value={members}></textarea>
         <p class="field-help">
-          One npub per line. Include this node’s member identity. The creator has no permanent
-          special authority.
+          One npub per line. Include your Nostr identity. The creator has no permanent special
+          authority.
         </p></label
       ><label class="wide"
         >QUORUM · REQUIRED SIGNATURES<input
@@ -313,16 +306,7 @@
       ><label class="wide"
         >RELAY SET<textarea rows="2" bind:value={relays} placeholder="wss://relay.example.com"
         ></textarea></label
-      >{#if !isPublic}<label class="wide"
-          >MEMBER → COMMUNICATION KEY MAPPINGS<textarea
-            rows="3"
-            bind:value={communicationKeys}
-            placeholder="member-npub communication-npub"
-          ></textarea>
-          <p class="field-help">
-            One pair per line for every other member. This node’s mapping is added automatically.
-          </p></label
-        >{/if}<label class="check-label wide"
+      ><label class="check-label wide"
         ><input type="checkbox" bind:checked={stateful} />Stateful contract</label
       >{#if stateful}<label class="wide"
           >INITIAL STATE (UTF-8)<textarea bind:value={initialState} rows="2"></textarea></label

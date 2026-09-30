@@ -36,28 +36,24 @@ pub struct Engine {
     pub db: Storage,
     pub vm: FedVm,
     signing: Arc<Keys>,
-    pub communication_key: PublicKey,
     pub transport: Transport,
     pub mutation: Arc<Mutex<()>>,
     execution: Arc<Semaphore>,
 }
 impl Engine {
-    pub fn new(
-        db: Storage,
-        vm: FedVm,
-        signing: Keys,
-        communication_key: PublicKey,
-        transport: Transport,
-    ) -> Self {
-        Self {
+    pub fn new(db: Storage, vm: FedVm, signing: Keys, transport: Transport) -> Result<Self> {
+        ensure!(
+            signing.public_key() == transport.public_key(),
+            "signing and messaging must use the same Nostr identity"
+        );
+        Ok(Self {
             db,
             vm,
             signing: Arc::new(signing),
-            communication_key,
             transport,
             mutation: Arc::new(Mutex::new(())),
             execution: Arc::new(Semaphore::new(2)),
-        }
+        })
     }
     pub fn member_key(&self) -> PublicKey {
         self.signing.public_key()
@@ -117,7 +113,7 @@ impl Engine {
             .into_iter()
             .map(|s| s.federation_id)
             .collect::<Vec<_>>();
-        self.transport.subscribe(&ids, self.communication_key).await
+        self.transport.subscribe(&ids).await
     }
     pub fn invitation(&self, id: &str) -> Result<Invitation> {
         let epochs = self.epochs(id)?;
@@ -202,7 +198,18 @@ impl Engine {
     }
     pub fn create(&self, mut state: FederationState, wasm: &[u8]) -> Result<FederationState> {
         state.members.sort();
-        state.communication_keys.sort();
+        ensure!(
+            state
+                .communication_keys
+                .iter()
+                .all(|(m, k)| m == k && state.members.contains(m)),
+            "new federations use member identities for private messaging"
+        );
+        state.communication_keys = state
+            .members
+            .iter()
+            .map(|m| (m.clone(), m.clone()))
+            .collect();
         state.relays.sort();
         state.relays.dedup();
         state.validate()?;

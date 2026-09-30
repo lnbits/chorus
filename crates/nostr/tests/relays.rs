@@ -62,3 +62,51 @@ async fn encrypted_delivery_over_a_real_relay() -> Result<()> {
     b.client.shutdown().await;
     Ok(())
 }
+
+#[tokio::test]
+async fn migrated_inbox_reads_legacy_messages_but_sends_as_current_identity() -> Result<()> {
+    let relay = relay().await?;
+    let identity = Keys::generate();
+    let legacy = Keys::generate();
+    let peer = Keys::generate();
+    let migrated = Transport::with_legacy_inbox(
+        identity.clone(),
+        Some(legacy.clone()),
+        &[config(&relay.url)],
+    )
+    .await?;
+    let other = Transport::new(peer.clone(), &[config(&relay.url)]).await?;
+    migrated
+        .client
+        .connect()
+        .and_wait(Duration::from_secs(3))
+        .await;
+    other
+        .client
+        .connect()
+        .and_wait(Duration::from_secs(3))
+        .await;
+    migrated.subscribe(&[]).await?;
+    let event = EventBuilder::new(Kind::Custom(17903), "legacy inbox").finalize(&peer)?;
+    other
+        .publish(&event, &[legacy.public_key().to_hex()])
+        .await?;
+    let received = migrated.private_backfill().await?;
+    assert_eq!(received.len(), 1);
+    assert_eq!(migrated.unwrap(received[0].clone()).await?, event);
+    let outbound = EventBuilder::new(Kind::Custom(17903), "same identity").finalize(&identity)?;
+    migrated
+        .publish(&outbound, &[peer.public_key().to_hex()])
+        .await?;
+    let received = other.private_backfill().await?;
+    assert_eq!(received.len(), 1);
+    let gift = UnwrappedGift::from_gift_wrap(&peer, &received[0])?;
+    assert_eq!(gift.sender, identity.public_key());
+    assert_eq!(
+        other.unwrap(received[0].clone()).await?.pubkey,
+        identity.public_key()
+    );
+    migrated.client.shutdown().await;
+    other.client.shutdown().await;
+    Ok(())
+}

@@ -6,16 +6,22 @@ Chorus is a Rust federation node with a SvelteKit interface and a Tauri 2 deskto
 
 **Release status: pre-production.** The executable member-attestation path works end to end, including real multi-relay tests and independent verification. This repository is not yet cleared to coordinate valuable actions. In particular, FROST has a real DKG/signing/verification library and tests, but does **not** yet have an operational distributed ceremony/session coordinator or encrypted share lifecycle in the node. See [release gates and security review](docs/security-review.md). No fabricated FROST signature or consensus fallback is used.
 
+## Downloads
+
+Pushing a version tag such as `v0.1.0` runs the [Linux release workflow](.github/workflows/release.yml). Once it passes, the [GitHub release](https://github.com/lnbits/chorus/releases) contains an x86_64 AppImage, a server archive with the built web UI, and SHA-256 checksums. Neither package needs Cargo or npm to run. See [download and release instructions](docs/deployment.md#linux-release-packages).
+
 ## Run locally
 
 Requirements: Rust 1.98+, Node.js 24+, a C toolchain. SQLite is bundled. Docker is optional.
+
+For a fresh Ubuntu VPS without Cargo or npm, first follow the [build-tool installation instructions](docs/deployment.md#vps-without-docker).
 
 ```sh
 cargo build --locked -p chorus-node -p chorus-verifier
 npm ci --prefix apps/web
 npm run build --prefix apps/web
 
-# Interactive, non-echoed password prompts. Creates independent identities.
+# Interactive, non-echoed password prompts. Creates one Nostr identity and a separate admin login.
 ./target/debug/chorus-node init --username admin
 ./target/debug/chorus-node serve --web-root apps/web/build
 ```
@@ -24,11 +30,13 @@ Open **http://127.0.0.1:8787** and sign in. New nodes start with six enabled rea
 
 For frontend development, run the node with `--origin http://127.0.0.1:5173`, then `npm run dev --prefix apps/web`. Vite proxies the API; use precisely that origin for CSRF validation.
 
-To try a contract, upload [`examples/echo.wasm`](examples/echo.wasm), include your member npub from Settings, and choose a threshold appropriate to the actual member set. The example is a real stateless byte-echo contract, not a mock node. Rebuild it with:
+To try a contract, upload [`examples/echo.wasm`](examples/echo.wasm), include your npub from Settings, and choose a threshold appropriate to the actual member set. The example is a real stateless byte-echo contract, not a mock node. Rebuild it with:
 
 ```sh
 cargo run -p chorus-fedvm --example build_contract
 ```
+
+Use an existing Nostr key with `chorus-node init --import-nsec`, or stop an existing node and run `chorus-node replace-key` to replace its encrypted nsec. Both use hidden prompts. Key replacement preserves an encrypted backup and requires explicit acknowledgement when the old npub is still a federation member. See [identity and key replacement](docs/operations.md).
 
 ## Federation workflow
 

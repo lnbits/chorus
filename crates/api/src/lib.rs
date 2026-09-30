@@ -124,7 +124,7 @@ pub fn router(api: Api, web_root: Option<&str>) -> Router {
         .layer(DefaultBodyLimit::max(MAX_WASM * 3))
         .with_state(Arc::new(api));
     let routes = if let Some(root) = web_root {
-        routes.fallback_service(tower_http::services::ServeDir::new(root).not_found_service(
+        routes.fallback_service(tower_http::services::ServeDir::new(root).fallback(
             tower_http::services::ServeFile::new(format!("{root}/200.html")),
         ))
     } else {
@@ -302,22 +302,17 @@ async fn create(
     for m in v.members {
         members.push(PublicKey::parse(&m).map_err(anyhow::Error::from)?.to_hex());
     }
-    let mut mappings = vec![];
-    for (m, k) in v.communication_keys {
-        mappings.push((
-            PublicKey::parse(&m).map_err(anyhow::Error::from)?.to_hex(),
-            PublicKey::parse(&k).map_err(anyhow::Error::from)?.to_hex(),
-        ));
+    for (member, inbox) in v.communication_keys {
+        if PublicKey::parse(&member).map_err(anyhow::Error::from)?
+            != PublicKey::parse(&inbox).map_err(anyhow::Error::from)?
+        {
+            return Err(anyhow::anyhow!(
+                "new federations use member identities for private messaging"
+            )
+            .into());
+        }
     }
-    if !mappings
-        .iter()
-        .any(|(m, _)| m == &api.engine.member_key().to_hex())
-    {
-        mappings.push((
-            api.engine.member_key().to_hex(),
-            api.engine.communication_key.to_hex(),
-        ));
-    }
+    let mappings = members.iter().map(|m| (m.clone(), m.clone())).collect();
     let state = FederationState {
         protocol_version: VERSION,
         federation_id: token(),
@@ -558,10 +553,23 @@ async fn propose(
     State(api): State<Arc<Api>>,
     h: HeaderMap,
     Path(id): Path<String>,
-    Json(next): Json<FederationState>,
+    Json(mut next): Json<FederationState>,
 ) -> ApiResult<Json<Value>> {
     auth(&api, &h, true)?;
     let _guard = api.engine.mutation.lock().await;
+    for member in &mut next.members {
+        *member = PublicKey::parse(member.as_str())
+            .map_err(anyhow::Error::from)?
+            .to_hex();
+    }
+    for (member, inbox) in &mut next.communication_keys {
+        *member = PublicKey::parse(member.as_str())
+            .map_err(anyhow::Error::from)?
+            .to_hex();
+        *inbox = PublicKey::parse(inbox.as_str())
+            .map_err(anyhow::Error::from)?
+            .to_hex();
+    }
     let pid = api.engine.propose(&id, next)?;
     Ok(Json(json!({"id":pid})))
 }
@@ -582,7 +590,7 @@ async fn activity(State(api): State<Arc<Api>>, h: HeaderMap) -> ApiResult<Json<V
 async fn settings(State(api): State<Arc<Api>>, h: HeaderMap) -> ApiResult<Json<Value>> {
     auth(&api, &h, false)?;
     Ok(Json(
-        json!({"username":api.engine.db.admin()?.0,"node_npub":api.engine.communication_key.to_bech32().map_err(anyhow::Error::from)?,"member_npub":api.engine.member_key().to_bech32().map_err(anyhow::Error::from)?,"member_hex":api.engine.member_key().to_hex(),"communication_hex":api.engine.communication_key.to_hex(),"key_storage":"XChaCha20-Poly1305 / Argon2id","sessions":api.engine.db.sessions()?,"session_ttl":api.session_ttl,"relays":api.engine.db.setting::<Vec<RelayConfig>>("relays")?.unwrap_or_else(chorus_nostr::default_relays),"relay_health":api.engine.transport.health().await,"vm":{"version":VM_VERSION,"max_memory":chorus_fedvm::MEMORY_LIMIT,"max_fuel":chorus_fedvm::FUEL_LIMIT,"max_output":chorus_fedvm::OUTPUT_LIMIT,"max_wasm":MAX_WASM},"frost":"library available; distributed orchestration not enabled"}),
+        json!({"username":api.engine.db.admin()?.0,"identity_npub":api.engine.member_key().to_bech32().map_err(anyhow::Error::from)?,"node_npub":api.engine.member_key().to_bech32().map_err(anyhow::Error::from)?,"member_npub":api.engine.member_key().to_bech32().map_err(anyhow::Error::from)?,"member_hex":api.engine.member_key().to_hex(),"communication_hex":api.engine.member_key().to_hex(),"key_storage":"XChaCha20-Poly1305 / Argon2id","sessions":api.engine.db.sessions()?,"session_ttl":api.session_ttl,"relays":api.engine.db.setting::<Vec<RelayConfig>>("relays")?.unwrap_or_else(chorus_nostr::default_relays),"relay_health":api.engine.transport.health().await,"vm":{"version":VM_VERSION,"max_memory":chorus_fedvm::MEMORY_LIMIT,"max_fuel":chorus_fedvm::FUEL_LIMIT,"max_output":chorus_fedvm::OUTPUT_LIMIT,"max_wasm":MAX_WASM},"frost":"library available; distributed orchestration not enabled"}),
     ))
 }
 async fn relays(

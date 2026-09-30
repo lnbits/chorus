@@ -1,6 +1,6 @@
 # Architecture
 
-The node owns all consensus and signing decisions. SvelteKit is a static client of an authenticated, same-origin HTTP API; it never receives Nostr secrets or FROST shares. Tauri provides a local bootstrap window and starts the same standalone node executable through a private credential pipe. Closing the desktop process stops its managed sidecar; a VPS node runs as its own service without any Tauri dependency.
+The node owns all consensus and signing decisions. The web interface is a static client of an authenticated, same-origin HTTP API; that API never receives or returns Nostr secrets or FROST shares. The local desktop bootstrap may accept a user-entered nsec for encrypted import through native IPC. Tauri provides a local bootstrap window and starts the same standalone node executable through a private credential pipe. Closing the desktop process stops its managed sidecar; a VPS node runs as its own service without any Tauri dependency.
 
 ```mermaid
 flowchart LR

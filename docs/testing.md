@@ -14,19 +14,20 @@ npm run lint --prefix apps/web
 npm run build --prefix apps/web
 ```
 
-The Rust suite contains 29 passing tests:
+The Rust suite contains 32 passing tests:
 
-- 15 federation/API integration tests: independently executing 3-node and 10-node groups; one member offline; 100-member state; strict-majority boundaries; an 8/10 to 6/10 quorum change requiring eight old-member approvals; member add/remove and WASM upgrade; stale/forged events; duplicate handling; conflicting results; stateful double-signing refusal; cross-job equivocation and proof withdrawal; pinned-genesis substitution; HTTP authentication/CSRF/logout; NIP-17 recipient validation; real FROST DKG and threshold signing; exported CLI proof; a clean node joining and syncing over two actual local WebSocket relays.
+- 16 federation/API integration tests: independently executing 3-node and 10-node groups; one member offline; 100-member state; strict-majority boundaries; an 8/10 to 6/10 quorum change requiring eight old-member approvals; member add/remove and WASM upgrade; stale/forged events; duplicate handling; conflicting results; stateful double-signing refusal; cross-job equivocation and proof withdrawal; pinned-genesis substitution; HTTP authentication/CSRF/logout; NIP-17 recipient validation; real FROST DKG and threshold signing; exported CLI proof; a clean node joining and syncing over two actual local WebSocket relays, for both public and private federations using one identity per node.
 - 7 FedVM tests: deterministic output; malformed bytes/hash mismatch; forbidden imports; infinite loop/fuel exhaustion; memory bomb; oversized output/out-of-bounds pointers; start functions and floating-point rejection.
-- 2 real-relay transport tests: multi-relay operation, one relay offline, restart/backfill, and encrypted NIP-17 delivery.
+- 3 real-relay transport tests: multi-relay operation, one relay offline, restart/backfill, encrypted NIP-17 delivery, and legacy inbox decryption with outgoing messages authenticated by the current identity.
 - 2 protocol tests: strict-majority counts across arbitrary member counts and canonical round-trip/domain/trailing-byte validation.
+- 1 CLI identity lifecycle test: imported nsec, one-vault initialization, running-node exclusion, wrong password/invalid key rejection, membership-loss guard, encrypted backup, replacement, unchanged history/reservations and no secret output.
 - 3 storage tests: immutable history and signature reservations, encrypted-vault purpose binding/wrong credentials, and disk restart preserving signing guards and append-only history.
 
 Relay tests need permission to bind local sockets. They use disposable relay servers, never live third-party relays. The full 10-node test runs independent engines; the 100-member test checks state and quorum computation, not a 100-machine deployment.
 
 ## Browser against a real node
 
-Build the binaries and static frontend first. The runner creates a disposable SQLite directory, generates random test passwords, initializes independent identities, starts a real node on an ephemeral loopback port, runs Playwright, and removes the directory after stopping the node. It does not mock HTTP, execute a fake contract or use production identities.
+Build the binaries and static frontend first. The runner creates a disposable SQLite directory, generates random test passwords, initializes one Nostr identity per node, starts a real node on an ephemeral loopback port, runs Playwright, and removes the directory after stopping the node. It does not mock HTTP, execute a fake contract or use production identities.
 
 ```sh
 cargo build --locked -p chorus-node -p chorus-verifier
@@ -58,7 +59,13 @@ nix develop --command cargo clippy --locked --manifest-path apps/desktop/Cargo.t
 cargo fmt --manifest-path apps/desktop/Cargo.toml -- --check
 ```
 
-This does not certify installed desktop runtime behavior. Windows/macOS builds, code signing, packaging, Docker deployment and complete Nix package builds remain platform release checks. The manual desktop CI workflow includes a three-platform build matrix.
+This does not certify installed desktop runtime behavior. The Linux release workflow builds an AppImage and server archive on Ubuntu 22.04, smoke-tests the extracted server (initialization, unlock, health, SPA routes and JavaScript assets), and checks the AppImage's sidecar/resource layout before publication. Run its artifact smoke test locally with Python 3.12+:
+
+```sh
+python3 scripts/test-linux-package.py dist/chorus-0.1.0-linux-x86_64.tar.gz
+```
+
+The test uses temporary credentials and disables default public relays in its disposable database before startup. It cleans up the process and data on exit. A local Ubuntu 22.04 container with a virtual display also opened the release AppImage, unlocked a disposable keystore, started its bundled node and displayed its packaged web UI. Network access was disabled for that graphical test. Broader interactive desktop behavior, Windows/macOS builds, code signing, Docker service deployment and complete Nix package builds remain platform release checks. The manual desktop CI workflow retains a three-platform build matrix. See [release packaging](deployment.md#linux-release-packages).
 
 ## Dependency audits and fuzzing
 

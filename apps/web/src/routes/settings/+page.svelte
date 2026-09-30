@@ -5,8 +5,7 @@
   type Relay = { url: string; enabled: boolean; read: boolean; write: boolean; private: boolean };
   type Settings = {
     username: string;
-    node_npub: string;
-    member_npub: string;
+    identity_npub: string;
     key_storage: string;
     session_ttl: number;
     sessions: { created_at: number; expires_at: number }[];
@@ -107,7 +106,8 @@
         <p class="eyebrow" style="font-size:11px;font-weight:bold">SIGNING IDENTITY</p>
         <h2>Keys stay on your node.</h2>
         <p class="muted">
-          Admin access, Nostr communication and member signing use separate identities.
+          One Nostr identity signs federation results and governance votes, and handles private
+          messages. Your admin login is separate.
         </p>
       </div>
       <div class="identity-meta">
@@ -129,7 +129,7 @@
         <div class="fields">
           <label
             >ADMIN USERNAME<input readonly value={data.username} />
-            <p class="field-help">Separate from Nostr and federation signing identities.</p></label
+            <p class="field-help">Separate from your Nostr identity.</p></label
           ><label
             >SESSION EXPIRY<input readonly value={`${data.session_ttl / 3600} hours`} />
             <p class="field-help">
@@ -197,10 +197,13 @@
       </div>
     </div>
   {:else if tab === 'Nostr'}<div class="panel">
-      <div class="panel-head"><h2>Public identities</h2></div>
+      <div class="panel-head"><h2>Your Nostr identity</h2></div>
       <div class="panel-body">
-        <div class="kv"><span>NODE NPUB</span><code class="hash">{data.node_npub}</code></div>
-        <div class="kv"><span>MEMBER NPUB</span><code class="hash">{data.member_npub}</code></div>
+        <div class="kv"><span>YOUR NPUB</span><code class="hash">{data.identity_npub}</code></div>
+        <p class="field-help">
+          Use this npub to join federations. The same identity is used across this node’s
+          federations.
+        </p>
         <div class="kv"><span>KEY STORAGE</span><span>{data.key_storage}</span></div>
         <div class="kv">
           <span>SIGNING</span><span
@@ -208,6 +211,19 @@
           >
         </div>
         <div class="kv"><span>FROST</span><span>{data.frost}</span></div>
+        <details style="margin-top:24px">
+          <summary>Change the key in your keystore</summary>
+          <p class="field-help">
+            Stop the node, then run this command on the machine that stores your keystore. It
+            prompts privately for the keystore password and replacement nsec.
+          </p>
+          <pre>chorus-node replace-key</pre>
+          <p class="field-help">
+            An encrypted backup is retained. A different nsec changes your npub; existing
+            federations must approve the new identity through governance. Your signing history is
+            preserved.
+          </p>
+        </details>
       </div>
     </div>
   {:else if tab === 'Relays'}<div class="panel">

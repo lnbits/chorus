@@ -45,7 +45,6 @@
     (federation?.members.length || 0) + (change === 'add' ? 1 : change === 'remove' ? -1 : 0)
   );
   let memberKey = $state('');
-  let communicationKey = $state('');
   let contractHash = $state('');
   let notice = $state('');
   const id = $derived(page.params.id);
@@ -105,15 +104,15 @@
       next.threshold = { type: 'absolute', value: nextThreshold };
       if (change === 'add') {
         next.members = [...next.members, memberKey.trim()];
-        if (communicationKey)
-          next.communication_keys = [
-            ...next.communication_keys,
-            [memberKey.trim(), communicationKey.trim()]
-          ];
+        next.communication_keys = [
+          ...next.communication_keys,
+          [memberKey.trim(), memberKey.trim()]
+        ];
       } else if (change === 'remove') {
         next.members = next.members.filter((m) => m !== memberKey);
         next.communication_keys = next.communication_keys.filter(([m]) => m !== memberKey);
       } else if (change === 'contract') next.wasm_hash = contractHash;
+      else if (change === 'identity') next.communication_keys = next.members.map((m) => [m, m]);
       await api(`/federations/${id}/proposals`, { method: 'POST', body: JSON.stringify(next) });
       modal = null;
       tab = 'Governance';
@@ -557,13 +556,13 @@
           ><option value="threshold">Change threshold</option><option value="add">Add member</option
           ><option value="remove">Remove member</option><option value="contract"
             >Replace WASM contract</option
-          ></select
+          ><option value="identity">Use member identities for private messaging</option></select
         ></label
-      >{#if change === 'add'}<label class="wide"
-          >MEMBER PUBLIC KEY (64-CHARACTER HEX)<input class="mono" bind:value={memberKey} /></label
-        ><label class="wide"
-          >COMMUNICATION PUBLIC KEY (HEX)<input class="mono" bind:value={communicationKey} />
-          <p class="field-help">Required for private federations.</p></label
+      >{#if change === 'identity'}<p class="field-help wide">
+          This changes each private-message destination to the member’s own npub. Members should
+          upgrade to the single-identity version before approving. Historical epochs stay unchanged.
+        </p>{:else if change === 'add'}<label class="wide"
+          >MEMBER NPUB (OR HEX PUBLIC KEY)<input class="mono" bind:value={memberKey} /></label
         >{:else if change === 'remove'}<label class="wide"
           >MEMBER<select bind:value={memberKey}
             ><option value="">Choose a member</option

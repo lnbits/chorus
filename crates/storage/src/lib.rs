@@ -303,6 +303,123 @@ impl Storage {
         Ok(())
     }
 }
+/// Held for the lifetime of a node or keystore mutation to prevent replacing a live key.
+pub fn lock_node(dir: &Path) -> Result<std::fs::File> {
+    let mut options = std::fs::OpenOptions::new();
+    options.read(true).write(true).create(true).truncate(false);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let file = options.open(dir.join("node.lock"))?;
+    file.try_lock().map_err(|_| {
+        anyhow::anyhow!("node is running or the keystore is busy; stop it before changing keys")
+    })?;
+    Ok(file)
+}
+fn private_write_new(path: &Path, bytes: &[u8]) -> Result<()> {
+    use std::io::Write;
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let mut file = options.open(path)?;
+    file.write_all(bytes)?;
+    file.sync_all()?;
+    Ok(())
+}
+/// Caller must hold lock_node. Keeps the old encrypted vault and all database history.
+pub fn replace_identity(
+    dir: &Path,
+    password: &str,
+    nsec: &str,
+) -> Result<(nostr_sdk::prelude::Keys, std::path::PathBuf)> {
+    use nostr_sdk::prelude::{FromBech32, Keys, SecretKey};
+    let old = load_identity(dir, password)?;
+    let keys = Keys::new(
+        SecretKey::from_bech32(nsec.trim()).map_err(|_| anyhow::anyhow!("invalid Nostr nsec"))?,
+    );
+    ensure!(
+        keys.public_key() != old.public_key(),
+        "this nsec is already the active identity"
+    );
+    let bytes = Zeroizing::new(keys.secret_key().to_secret_bytes());
+    let encrypted = seal(bytes.as_ref(), password, "member")?;
+    let backup = dir.join(format!(
+        "member-backup-{}-{}.vault",
+        old.public_key().to_hex(),
+        token()
+    ));
+    private_write_new(&backup, &std::fs::read(dir.join("member.vault"))?)?;
+    let temporary = dir.join(format!(".member-{}.tmp", token()));
+    private_write_new(&temporary, &encrypted)?;
+    // Persist the backup before committing the atomic replacement.
+    #[cfg(unix)]
+    std::fs::File::open(dir)?.sync_all()?;
+    if let Err(error) = std::fs::rename(&temporary, dir.join("member.vault")) {
+        let _ = std::fs::remove_file(&temporary);
+        return Err(error.into());
+    }
+    #[cfg(unix)]
+    std::fs::File::open(dir)?.sync_all()?;
+    Ok((keys, backup))
+}
+/// One persistent Nostr identity for signing and messaging. The legacy filename/AAD
+/// preserve existing membership and signing reservations without rewriting history.
+pub fn initialize_identity(
+    dir: &Path,
+    password: &str,
+    nsec: Option<&str>,
+) -> Result<nostr_sdk::prelude::Keys> {
+    use nostr_sdk::prelude::{FromBech32, Keys, SecretKey};
+    use std::io::Write;
+    let keys = match nsec {
+        Some(value) => Keys::new(
+            SecretKey::from_bech32(value.trim())
+                .map_err(|_| anyhow::anyhow!("invalid Nostr nsec"))?,
+        ),
+        None => Keys::generate(),
+    };
+    let secret = Zeroizing::new(keys.secret_key().to_secret_bytes());
+    let encrypted = seal(secret.as_ref(), password, "member")?;
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let mut file = options.open(dir.join("member.vault"))?;
+    file.write_all(&encrypted)?;
+    file.sync_all()?;
+    Ok(keys)
+}
+pub fn load_identity(dir: &Path, password: &str) -> Result<nostr_sdk::prelude::Keys> {
+    use nostr_sdk::prelude::{Keys, SecretKey};
+    let bytes = unseal(
+        &std::fs::read(dir.join("member.vault"))?,
+        password,
+        "member",
+    )?;
+    Ok(Keys::new(SecretKey::from_slice(&bytes)?))
+}
+/// Existing two-key nodes retain their old inbox only for decrypting historical
+/// messages. It is never used to sign or encrypt a new outgoing message.
+pub fn load_legacy_inbox(dir: &Path, password: &str) -> Result<Option<nostr_sdk::prelude::Keys>> {
+    use nostr_sdk::prelude::{Keys, SecretKey};
+    let path = dir.join("communication.vault");
+    let blob = match std::fs::read(path) {
+        Ok(blob) => blob,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error.into()),
+    };
+    let bytes = unseal(&blob, password, "communication")?;
+    Ok(Some(Keys::new(SecretKey::from_slice(&bytes)?)))
+}
 /// The master password is read from the terminal or a systemd credential file, never from HTTP.
 /// Keys are distinct by purpose and encrypted with random XChaCha20 nonce + Argon2id salt.
 pub fn seal(secret: &[u8], password: &str, purpose: &str) -> Result<Vec<u8>> {

@@ -1,7 +1,6 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 use anyhow::{Context, Result, ensure};
-use chorus_storage::{Storage, seal, unseal};
-use nostr_sdk::prelude::*;
+use chorus_storage::{Storage, initialize_identity, load_identity};
 use std::{
     io::Write,
     path::PathBuf,
@@ -55,8 +54,10 @@ async fn initialize(
     username: String,
     admin_password: String,
     key_password: String,
+    nsec: Option<String>,
 ) -> std::result::Result<(), String> {
     tauri::async_runtime::spawn_blocking(move || -> Result<()> {
+        let nsec = nsec.map(Zeroizing::new);
         let admin = Zeroizing::new(admin_password);
         let password = Zeroizing::new(key_password);
         let p = directory(&app)?;
@@ -64,6 +65,7 @@ async fn initialize(
             !username.is_empty() && username.len() <= 64,
             "invalid username"
         );
+        let _lock = chorus_storage::lock_node(&p)?;
         let db = Storage::open(p.join("chorus.sqlite"))?;
         ensure!(db.admin().is_err(), "node already initialized");
         chorus_storage::password_hash(&admin)?;
@@ -71,25 +73,8 @@ async fn initialize(
             password.len() >= 12,
             "keystore password requires at least 12 characters"
         );
-        for purpose in ["communication", "member"] {
-            let keys = Keys::generate();
-            let secret = Zeroizing::new(keys.secret_key().to_secret_bytes());
-            let data = seal(secret.as_ref(), &password, purpose)?;
-            let mut options = std::fs::OpenOptions::new();
-            options.write(true).create_new(true);
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::OpenOptionsExt;
-                options.mode(0o600);
-            }
-            let mut f = options.open(p.join(format!("{purpose}.vault")))?;
-            f.write_all(&data)?;
-            f.sync_all()?;
-            db.set_setting(
-                &format!("{purpose}_public_key"),
-                &keys.public_key().to_hex(),
-            )?;
-        }
+        let identity = initialize_identity(&p, &password, nsec.as_ref().map(|s| s.as_str()))?;
+        db.set_setting("member_public_key", &identity.public_key().to_hex())?;
         db.init_admin(&username, &admin)?;
         db.set_setting("relays", &chorus_nostr::default_relays())?;
         Ok(())
@@ -136,7 +121,7 @@ async fn start_local(
         let password = Zeroizing::new(key_password);
         let p = directory(&app)?;
         // Check credentials before process launch; errors never contain secret material.
-        unseal(&std::fs::read(p.join("member.vault"))?, &password, "member")?;
+        load_identity(&p, &password)?;
         let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
         let port = listener.local_addr()?.port();
         drop(listener);

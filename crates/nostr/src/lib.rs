@@ -36,19 +36,40 @@ pub fn default_relays() -> Vec<RelayConfig> {
 pub struct Transport {
     pub client: Client,
     keys: Arc<Keys>,
+    legacy_inbox: Option<Arc<Keys>>,
 }
 impl Transport {
     pub async fn new(keys: Keys, relays: &[RelayConfig]) -> Result<Self> {
+        Self::with_legacy_inbox(keys, None, relays).await
+    }
+    pub async fn with_legacy_inbox(
+        keys: Keys,
+        legacy_inbox: Option<Keys>,
+        relays: &[RelayConfig],
+    ) -> Result<Self> {
         let mut limits = RelayLimits::default();
         limits.messages.max_size = Some((MAX_MESSAGE * 4) as u32);
         limits.events.max_size = Some((MAX_MESSAGE * 3) as u32);
         let client = Client::builder().relay_limits(limits).build();
         let transport = Self {
             client,
+            legacy_inbox: legacy_inbox
+                .filter(|old| old.public_key() != keys.public_key())
+                .map(Arc::new),
             keys: Arc::new(keys),
         };
         transport.configure(relays).await?;
         Ok(transport)
+    }
+    pub fn public_key(&self) -> PublicKey {
+        self.keys.public_key()
+    }
+    pub fn inbox_keys(&self) -> Vec<PublicKey> {
+        let mut keys = vec![self.public_key()];
+        if let Some(legacy) = &self.legacy_inbox {
+            keys.push(legacy.public_key());
+        }
+        keys
     }
     pub async fn configure(&self, relays: &[RelayConfig]) -> Result<()> {
         self.client.remove_all_relays().await?;
@@ -72,11 +93,7 @@ impl Transport {
         self.client.connect().await;
         Ok(())
     }
-    pub async fn subscribe(
-        &self,
-        federations: &[String],
-        communication_key: PublicKey,
-    ) -> Result<()> {
+    pub async fn subscribe(&self, federations: &[String]) -> Result<()> {
         if self.client.relays().await.is_empty() {
             return Ok(());
         }
@@ -91,7 +108,11 @@ impl Transport {
                 .await?;
         }
         self.client
-            .subscribe(Filter::new().kind(Kind::GiftWrap).pubkey(communication_key))
+            .subscribe(
+                Filter::new()
+                    .kind(Kind::GiftWrap)
+                    .pubkeys(self.inbox_keys()),
+            )
             .await?;
         Ok(())
     }
@@ -116,7 +137,7 @@ impl Transport {
             .fetch_events(
                 Filter::new()
                     .kind(Kind::GiftWrap)
-                    .pubkey(self.keys.public_key())
+                    .pubkeys(self.inbox_keys())
                     .limit(5000),
             )
             .timeout(Duration::from_secs(10))
@@ -147,7 +168,13 @@ impl Transport {
         if event.kind != Kind::GiftWrap {
             return Ok(event);
         }
-        let unwrapped = UnwrappedGift::from_gift_wrap(self.keys.as_ref(), &event)?;
+        let unwrapped = match UnwrappedGift::from_gift_wrap(self.keys.as_ref(), &event) {
+            Ok(value) => value,
+            Err(error) => match &self.legacy_inbox {
+                Some(legacy) => UnwrappedGift::from_gift_wrap(legacy.as_ref(), &event)?,
+                None => return Err(error.into()),
+            },
+        };
         ensure!(
             unwrapped.rumor.kind == Kind::PrivateDirectMessage,
             "not a private protocol message"

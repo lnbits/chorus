@@ -28,15 +28,8 @@ fn wasm(result: &[u8], state: Option<Vec<u8>>) -> Vec<u8> {
     wat::parse_str(format!("(module (memory (export \"memory\") 1 256) (data (i32.const 8192) \"{data}\") (func (export \"alloc\") (param i32) (result i32) i32.const 0) (func (export \"execute\") (param i32 i32) (result i64) i64.const {}))",(8192u64<<32)|output.len() as u64)).unwrap()
 }
 async fn node(key: Keys) -> Result<Engine> {
-    let comm = Keys::generate();
-    let t = Transport::new(comm.clone(), &[]).await?;
-    Ok(Engine::new(
-        Storage::open(":memory:")?,
-        FedVm::new()?,
-        key,
-        comm.public_key(),
-        t,
-    ))
+    let t = Transport::new(key.clone(), &[]).await?;
+    Engine::new(Storage::open(":memory:")?, FedVm::new()?, key, t)
 }
 fn state(keys: &[Keys], contract: &[u8], threshold: ThresholdRule) -> FederationState {
     let mut members = keys
@@ -179,6 +172,8 @@ async fn membership_change_and_wasm_upgrade_preserve_history() -> Result<()> {
     nodes[0].db.store_blob(&contract)?;
     let mut next = s.clone();
     next.members.push(extra.public_key().to_hex());
+    next.communication_keys
+        .push((extra.public_key().to_hex(), extra.public_key().to_hex()));
     next.threshold = ThresholdRule::Absolute(3);
     next.wasm_hash = hash(&contract);
     let pid = nodes[0].propose(&s.federation_id, next)?;
@@ -205,6 +200,8 @@ async fn membership_change_and_wasm_upgrade_preserve_history() -> Result<()> {
     let mut next = nodes[0].active(&s.federation_id)?;
     next.members
         .retain(|m| m != &nodes[2].member_key().to_hex());
+    next.communication_keys
+        .retain(|(member, _)| next.members.contains(member));
     next.threshold = ThresholdRule::Absolute(2);
     let pid = nodes[0].propose(&s.federation_id, next)?;
     for n in &nodes[1..] {
@@ -500,15 +497,21 @@ async fn export_reproducible_cli_fixture() -> Result<()> {
 mod relay_support;
 #[tokio::test]
 async fn clean_node_syncs_executes_and_verifies_through_multiple_relays() -> Result<()> {
+    relay_federation(true).await
+}
+#[tokio::test]
+async fn private_federation_uses_one_identity_to_join_execute_and_sync() -> Result<()> {
+    relay_federation(false).await
+}
+async fn relay_federation(public: bool) -> Result<()> {
     use std::time::Duration;
     let r1 = relay_support::relay().await?;
     let r2 = relay_support::relay().await?;
     let keys = (0..3).map(|_| Keys::generate()).collect::<Vec<_>>();
     let mut nodes = vec![];
     for key in &keys {
-        let comm = Keys::generate();
         let transport = Transport::new(
-            comm.clone(),
+            key.clone(),
             &[
                 relay_support::config(&r1.url),
                 relay_support::config(&r2.url),
@@ -524,15 +527,18 @@ async fn clean_node_syncs_executes_and_verifies_through_multiple_relays() -> Res
             Storage::open(":memory:")?,
             FedVm::new()?,
             key.clone(),
-            comm.public_key(),
             transport,
-        ));
+        )?);
     }
     let contract = wasm(b"over actual relays", None);
-    let s = nodes[0].create(
-        state(&keys, &contract, ThresholdRule::Absolute(2)),
-        &contract,
-    )?;
+    let mut initial = state(&keys, &contract, ThresholdRule::Absolute(2));
+    initial.public = public;
+    let s = nodes[0].create(initial, &contract)?;
+    assert!(
+        s.communication_keys
+            .iter()
+            .all(|(member, inbox)| member == inbox)
+    );
     let invite = nodes[0].invitation(&s.federation_id)?;
     nodes[1].join(&invite, &invite.genesis_hash)?;
     let (id, _) = nodes[0].submit_job(&s, b"network input".to_vec())?;
@@ -546,7 +552,12 @@ async fn clean_node_syncs_executes_and_verifies_through_multiple_relays() -> Res
             }
         }
         for n in &nodes[..2] {
-            for event in n.transport.backfill(&s.federation_id).await? {
+            let events = if public {
+                n.transport.backfill(&s.federation_id).await?
+            } else {
+                n.transport.private_backfill().await?
+            };
+            for event in events {
                 let _ = n.ingest(event).await;
             }
         }
@@ -555,7 +566,12 @@ async fn clean_node_syncs_executes_and_verifies_through_multiple_relays() -> Res
     // A previously offline clean member joins with a pinned invitation and reconstructs relay history.
     nodes[2].join(&invite, &invite.genesis_hash)?;
     for _ in 0..2 {
-        for event in nodes[2].transport.backfill(&s.federation_id).await? {
+        let events = if public {
+            nodes[2].transport.backfill(&s.federation_id).await?
+        } else {
+            nodes[2].transport.private_backfill().await?
+        };
+        for event in events {
             let _ = nodes[2].ingest(event).await;
         }
     }
