@@ -1,0 +1,13 @@
+[package]
+name = "chorus-frost"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+chorus-protocol = { path = "../protocol" }
+chorus-consensus = { path = "../consensus" }
+frost-ed25519.workspace = true
+rand.workspace = true
+serde.workspace = true

@@ -1,0 +1,44 @@
+[package]
+name = "chorus-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+[package.metadata]
+cargo-fuzz = true
+[dependencies]
+libfuzzer-sys = "0.4"
+chorus-protocol = { path = "../crates/protocol" }
+chorus-federation = { path = "../crates/federation" }
+nostr-sdk = "0.45.4"
+[workspace]
+members = ["."]
+[[bin]]
+name = "canonical"
+path = "fuzz_targets/canonical.rs"
+test = false
+doc = false
+bench = false
+[[bin]]
+name = "nostr"
+path = "fuzz_targets/nostr.rs"
+test = false
+doc = false
+bench = false
+[[bin]]
+name = "governance"
+path = "fuzz_targets/governance.rs"
+test = false
+doc = false
+bench = false
+[[bin]]
+name = "job"
+path = "fuzz_targets/job.rs"
+test = false
+doc = false
+bench = false
+[[bin]]
+name = "envelope"
+path = "fuzz_targets/envelope.rs"
+test = false
+doc = false
+bench = false

@@ -1,0 +1,17 @@
+/target
+/apps/web/node_modules
+/apps/web/.svelte-kit
+/apps/web/build
+/apps/desktop/target
+/node_modules
+*.sqlite*
+*.vault
+.env
+/data
+/apps/web/test-results
+/apps/web/playwright-report
+keystore-password.txt
+/apps/desktop/binaries
+/fuzz/target
+/fuzz/artifacts
+/fuzz/corpus

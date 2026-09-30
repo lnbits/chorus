@@ -1,0 +1,15 @@
+[package]
+name = "chorus-fedvm"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+chorus-protocol = { path = "../protocol" }
+wasmtime.workspace = true
+wasmparser.workspace = true
+borsh.workspace = true
+
+[dev-dependencies]
+wat = "1"

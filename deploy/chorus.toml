@@ -1,0 +1,6 @@
+# Copy to /etc/chorus/chorus.toml. Never put passwords or private keys here.
+bind = "127.0.0.1:8787"
+origin = "https://chorus.example.com"
+web_root = "/opt/chorus/web"
+key_password_file = "/run/credentials/chorus.service/keystore-password"
+session_ttl = 28800

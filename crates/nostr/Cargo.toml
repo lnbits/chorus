@@ -1,0 +1,19 @@
+[package]
+name = "chorus-nostr"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+nostr = { version = "0.45", features = ["nip59"] }
+anyhow.workspace = true
+chorus-protocol = { path = "../protocol" }
+nostr-sdk.workspace = true
+tokio.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+hex.workspace = true
+
+[dev-dependencies]
+tokio-tungstenite = "0.26"
+futures-util = "0.3"

@@ -1,0 +1,15 @@
+[package]
+name = "chorus-consensus"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+chorus-protocol = { path = "../protocol" }
+chorus-federation = { path = "../federation" }
+nostr-sdk.workspace = true
+serde.workspace = true
+
+[dev-dependencies]
+rand.workspace = true

@@ -1,0 +1,24 @@
+[package]
+name = "chorus-verifier"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+chorus-api = { path = "../api" }
+anyhow.workspace = true
+chorus-protocol = { path = "../protocol" }
+chorus-federation = { path = "../federation" }
+chorus-governance = { path = "../governance" }
+chorus-consensus = { path = "../consensus" }
+chorus-fedvm = { path = "../fedvm" }
+chorus-frost = { path = "../frost" }
+clap.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+hex.workspace = true
+nostr-sdk.workspace = true
+
+[[bin]]
+name = "fedwasm"
+path = "src/main.rs"

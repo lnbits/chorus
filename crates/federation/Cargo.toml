@@ -1,0 +1,13 @@
+[package]
+name = "chorus-federation"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+chorus-protocol = { path = "../protocol" }
+nostr-sdk.workspace = true
+
+[dev-dependencies]
+rand.workspace = true

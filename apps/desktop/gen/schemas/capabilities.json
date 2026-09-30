@@ -1,0 +1,1 @@
+{"local-bootstrap":{"identifier":"local-bootstrap","description":"Only the local bootstrap window may initialize or unlock the local node. Remote node pages receive no IPC permissions.","local":true,"windows":["main"],"permissions":["core:default"]}}

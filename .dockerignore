@@ -1,0 +1,9 @@
+.git
+**/node_modules
+**/target
+**/.svelte-kit
+**/build
+data
+*.sqlite*
+*.vault
+.env

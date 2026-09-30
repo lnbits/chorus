@@ -1,0 +1,24 @@
+services:
+  chorus:
+    build: .
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8787:8787"
+    environment:
+      CHORUS_ORIGIN: https://chorus.example.com
+      CHORUS_KEY_PASSWORD_FILE: /run/secrets/keystore_password
+    volumes:
+      - chorus-data:/home/chorus/data
+    secrets:
+      - keystore_password
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m
+    security_opt:
+      - no-new-privileges:true
+    cap_drop: [ALL]
+secrets:
+  keystore_password:
+    file: ./keystore-password.txt
+volumes:
+  chorus-data:
