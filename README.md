@@ -8,7 +8,7 @@ Chorus is a Rust federation node with a SvelteKit interface and a Tauri 2 deskto
 
 ## Downloads
 
-Pushing a version tag such as `v0.1.0` runs the [Linux release workflow](.github/workflows/release.yml). Once it passes, the [GitHub release](https://github.com/lnbits/chorus/releases) contains an x86_64 AppImage, a server archive with the built web UI, and SHA-256 checksums. Neither package needs Cargo or npm to run. See [download and release instructions](docs/deployment.md#linux-release-packages).
+Pushing a version tag such as `v0.1.0` runs the [Linux release workflow](.github/workflows/release.yml). Once it passes, the [GitHub release](https://github.com/lnbits/chorus/releases) contains an x86_64 AppImage, a server archive with the built web UI, and SHA-256 checksums. Neither package needs Cargo or npm to run. New AppImage builds also support `--headless` for VPS use, with `--host`, `--port` and `--origin` options. See [download and release instructions](docs/deployment.md#linux-release-packages).
 
 ## Run locally
 

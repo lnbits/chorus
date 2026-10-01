@@ -62,11 +62,14 @@ jobs:
         env:
           VERSION: ${{ steps.version.outputs.version }}
         run: bash scripts/package-linux.sh "v$VERSION"
+      - name: Test desktop launcher options
+        run: cargo test --locked --manifest-path apps/desktop/Cargo.toml
       - name: Test packaged node and web assets
         env:
           VERSION: ${{ steps.version.outputs.version }}
         run: |
           python3 scripts/test-linux-package.py "dist/chorus-${VERSION}-linux-x86_64.tar.gz"
+          python3 scripts/test-appimage.py "dist/Chorus_${VERSION}_amd64.AppImage"
           mkdir -p "$RUNNER_TEMP/chorus-appimage"
           cd "$RUNNER_TEMP/chorus-appimage"
           "$GITHUB_WORKSPACE/dist/Chorus_${VERSION}_amd64.AppImage" --appimage-extract > /dev/null

@@ -63,9 +63,12 @@ This does not certify installed desktop runtime behavior. The Linux release work
 
 ```sh
 python3 scripts/test-linux-package.py dist/chorus-0.1.0-linux-x86_64.tar.gz
+python3 scripts/test-appimage.py dist/Chorus_0.1.0_amd64.AppImage
 ```
 
-The test uses temporary credentials and disables default public relays in its disposable database before startup. It cleans up the process and data on exit. A local Ubuntu 22.04 container with a virtual display also opened the release AppImage, unlocked a disposable keystore, started its bundled node and displayed its packaged web UI. Network access was disabled for that graphical test. Broader interactive desktop behavior, Windows/macOS builds, code signing, Docker service deployment and complete Nix package builds remain platform release checks. The manual desktop CI workflow retains a three-platform build matrix. See [release packaging](deployment.md#linux-release-packages).
+The AppImage test unsets display variables, exercises headless initialization and startup on an explicit wildcard host/port, checks browser-origin enforcement and Secure cookies, and rejects invalid flags before any GUI is created. The same headless test also passed in a minimal Ubuntu 22.04 container with only the documented runtime libraries and Python for the test harness; GTK/WebKit development packages and a display server were absent. A virtual-display test additionally unlocked the desktop launcher and verified its bundled node at an explicitly selected `127.0.0.1:18787`. Launcher unit tests cover port defaults, remote HTTPS requirements, malformed origins and occupied ports.
+
+The tests use temporary credentials and disables default public relays in its disposable database before startup. It cleans up the process and data on exit. A local Ubuntu 22.04 container with a virtual display also opened the release AppImage, unlocked a disposable keystore, started its bundled node and displayed its packaged web UI. Network access was disabled for that graphical test. Broader interactive desktop behavior, Windows/macOS builds, code signing, Docker service deployment and complete Nix package builds remain platform release checks. The manual desktop CI workflow retains a three-platform build matrix. See [release packaging](deployment.md#linux-release-packages).
 
 ## Dependency audits and fuzzing
 

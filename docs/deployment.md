@@ -10,7 +10,7 @@ The `Linux release` GitHub Actions workflow runs when a `v*` tag is pushed. It b
 - `chorus-<version>-linux-x86_64.tar.gz`: `chorus-node`, `fedwasm`, built web assets, an example contract, documentation and service/proxy examples.
 - `SHA256SUMS`: checksums for both packages.
 
-Download from [GitHub Releases](https://github.com/lnbits/chorus/releases). These are Linux x86_64 builds; ARM64, Windows and macOS are not published by this workflow. The AppImage needs a graphical desktop. Use the server archive on a VPS. Users do not need Rust, Cargo, Node.js or npm.
+Download from [GitHub Releases](https://github.com/lnbits/chorus/releases). These are Linux x86_64 builds; ARM64, Windows and macOS are not published by this workflow. The AppImage opens a graphical desktop by default; use its `--headless` mode on a VPS. The server archive remains available for installing a system service. Users do not need Rust, Cargo, Node.js or npm.
 
 With both packages and `SHA256SUMS` in the same directory:
 
@@ -32,6 +32,45 @@ cd chorus-0.1.0-linux-x86_64
 ```
 
 Keep the data directory outside the extracted release directory. On an existing installation, stop the old process, back up the data and start the new binary with the same data directory; do not initialize it again. For an always-running VPS service, use the service account, credential and HTTPS setup below, starting at installation step 3. Distribution CA certificates must be installed for secure relay connections.
+
+### AppImage host, port and headless mode
+
+These options require an AppImage built with the launcher-option changes; the original published v0.1.0 AppImage does not include them.
+
+Set a fixed local port for the desktop launcher:
+
+```sh
+./Chorus_0.1.0_amd64.AppImage --host 127.0.0.1 --port 8787
+```
+
+On a minimal Ubuntu 22.04 VPS, install the shared runtime libraries that AppImage intentionally leaves to the host (no graphical desktop or display server is needed):
+
+```sh
+sudo apt update
+sudo apt install --no-install-recommends ca-certificates libfontconfig1 \
+  libx11-6 libx11-xcb1 libwayland-client0 libfribidi0 libharfbuzz0b \
+  libgbm1 libgl1 libegl1
+```
+
+Then initialize once and run without a display:
+
+```sh
+./Chorus_0.1.0_amd64.AppImage --headless --init \
+  --data-dir "$HOME/.local/share/chorus-server"
+
+./Chorus_0.1.0_amd64.AppImage --headless \
+  --data-dir "$HOME/.local/share/chorus-server" \
+  --host 0.0.0.0 --port 8787 \
+  --origin https://chorus.example.com
+```
+
+Initialization securely prompts for the admin and keystore passwords. Add `--import-nsec` to import an identity, or `--username NAME` to change the initial admin username. For an existing node, use its data directory and skip `--init`. Both desktop and headless modes default to the same application data directory (`~/.local/share/org.chorus.desktop` on Linux, respecting `XDG_DATA_HOME`). Only one process may use a node's data directory at a time.
+
+Headless mode serves the complete web UI. The node itself speaks HTTP; an HTTPS reverse proxy must provide the public origin. Open the configured `--origin` in your browser. `0.0.0.0` means all IPv4 interfaces and is not a browser address. When Caddy/nginx runs on the same VPS, prefer `--host 127.0.0.1 --port 8787 --origin https://chorus.example.com`. A remote IP is also possible if its HTTPS certificate and origin are configured correctly. No direct public HTTP mode is enabled.
+
+Host accepts IPv4 or IPv6 addresses. With `--host` or `--headless`, the default port is 8787; without either, desktop startup keeps its automatically allocated local port. Explicit `--port 0` requests an available port. Non-loopback hosts require an HTTPS `--origin`; origins must not contain a path, query, fragment or credentials. The desktop window opens that origin after checking the sidecar locally, so configure the reverse proxy before using a public desktop origin.
+
+Headless startup prompts for the keystore password. Services can instead use `--key-password-file /path/to/protected-file`. The node runs in the foreground and receives terminal/service stop signals. Run `--help` for all visible options. If FUSE is unavailable, put `--appimage-extract-and-run` before the Chorus flags. There is no build-tool or graphical-display requirement for headless mode.
 
 ### Publishing a release
 
@@ -144,7 +183,7 @@ npm ci --prefix apps/web
 ./scripts/build-desktop.sh
 ```
 
-The script uses the pinned Tauri CLI through npm, builds the standalone node, names the sidecar for the current target triple, builds the web app and bundles it with Tauri. The local bootstrap screen creates admin credentials and one generated or imported Nostr identity, encrypts its vault and starts the sidecar through a pipe. The UI then navigates to the node's ephemeral loopback port, using ordinary same-origin session authentication. Remote pages receive no native IPC capability. No shell/file-access plugin is exposed to those pages.
+The script uses the pinned Tauri CLI through npm, builds the standalone node, names the sidecar for the current target triple, builds the web app and bundles it with Tauri. The local bootstrap screen creates admin credentials and one generated or imported Nostr identity, encrypts its vault and starts the sidecar through a pipe. The UI then navigates to the configured browser origin (an ephemeral loopback port by default), using ordinary same-origin session authentication. Remote pages receive no native IPC capability. No shell/file-access plugin is exposed to those pages.
 
 The Linux release workflow publishes the AppImage and server archive described above. A separate manual `Desktop build` workflow retains the three-platform build matrix and stores build artifacts without publishing installers. Neither packaging workflow runs automatically on pull requests. Interactive desktop behavior, code signing/notarization and Windows/macOS execution still require platform testing.
 

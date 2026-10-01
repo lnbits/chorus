@@ -1,6 +1,8 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+mod launch;
 use anyhow::{Context, Result, ensure};
 use chorus_storage::{Storage, initialize_identity, load_identity};
+use clap::Parser;
 use std::{
     io::Write,
     path::PathBuf,
@@ -31,7 +33,10 @@ impl Drop for PendingChild {
     }
 }
 fn directory(app: &tauri::AppHandle) -> Result<PathBuf> {
-    let p = app.path().app_data_dir()?;
+    let p = match &app.state::<launch::Options>().data_dir {
+        Some(path) => path.clone(),
+        None => app.path().app_data_dir()?,
+    };
     std::fs::create_dir_all(&p)?;
     #[cfg(unix)]
     {
@@ -122,32 +127,21 @@ async fn start_local(
         let p = directory(&app)?;
         // Check credentials before process launch; errors never contain secret material.
         load_identity(&p, &password)?;
-        let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
-        let port = listener.local_addr()?.port();
-        drop(listener);
-        let exe = std::env::current_exe()?
-            .parent()
-            .context("executable directory unavailable")?
-            .join(if cfg!(windows) {
-                "chorus-node.exe"
-            } else {
-                "chorus-node"
-            });
-        let url = format!("http://127.0.0.1:{port}");
-        let child = Command::new(exe)
+        let endpoint = app.state::<launch::Options>().endpoint()?;
+        let child = Command::new(sidecar()?)
             .arg("--data-dir")
             .arg(&p)
             .arg("serve")
             .arg("--bind")
-            .arg(format!("127.0.0.1:{port}"))
+            .arg(endpoint.bind.to_string())
             .arg("--origin")
-            .arg(&url)
+            .arg(&endpoint.origin)
             .arg("--web-root")
             .arg(app.path().resource_dir()?.join("web"))
             .arg("--key-password-stdin")
             .stdin(Stdio::piped())
             .stdout(Stdio::null())
-            .stderr(Stdio::null())
+            .stderr(Stdio::inherit())
             .spawn()?;
         let mut pending = PendingChild(Some(child));
         pending
@@ -163,13 +157,18 @@ async fn start_local(
             .timeout(std::time::Duration::from_secs(1))
             .build()?;
         for _ in 0..100 {
+            if let Some(status) = pending.0.as_mut().context("missing child")?.try_wait()? {
+                anyhow::bail!(
+                    "Local node exited during startup ({status}). Check the terminal for details."
+                );
+            }
             if http
-                .get(format!("{url}/healthz"))
+                .get(format!("{}/healthz", endpoint.health_url))
                 .send()
                 .await
                 .is_ok_and(|r| r.status().is_success())
             {
-                window.navigate(url.parse()?)?;
+                window.navigate(endpoint.origin.parse()?)?;
                 *runtime
                     .child
                     .lock()
@@ -186,15 +185,102 @@ async fn start_local(
         .await
         .map_err(|e| e.to_string())
 }
+fn sidecar() -> Result<PathBuf> {
+    Ok(std::env::current_exe()?
+        .parent()
+        .context("executable directory unavailable")?
+        .join(if cfg!(windows) {
+            "chorus-node.exe"
+        } else {
+            "chorus-node"
+        }))
+}
+
+fn run_headless(options: &launch::Options, resources: PathBuf, identifier: &str) -> Result<()> {
+    let data = match &options.data_dir {
+        Some(path) => path.clone(),
+        None => dirs::data_dir()
+            .context("application data directory unavailable")?
+            .join(identifier),
+    };
+    let mut command = Command::new(sidecar()?);
+    command.arg("--data-dir").arg(data);
+    if options.init {
+        command
+            .arg("init")
+            .arg("--username")
+            .arg(options.username.as_deref().unwrap_or("admin"));
+        if options.import_nsec {
+            command.arg("--import-nsec");
+        }
+        if options.credentials_stdin {
+            command.arg("--credentials-stdin");
+        }
+    } else {
+        let endpoint = options.endpoint()?;
+        let web = resources.join("web");
+        ensure!(
+            web.join("200.html").is_file(),
+            "packaged web assets missing at {}",
+            web.display()
+        );
+        command
+            .arg("serve")
+            .arg("--bind")
+            .arg(endpoint.bind.to_string())
+            .arg("--origin")
+            .arg(endpoint.origin)
+            .arg("--web-root")
+            .arg(web);
+        if let Some(file) = &options.key_password_file {
+            command.arg("--key-password-file").arg(file);
+        }
+        if options.key_password_stdin {
+            command.arg("--key-password-stdin");
+        }
+    }
+    // On Unix the node replaces the launcher, preserving terminal signals and exit status.
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        Err(command.exec()).context("cannot launch bundled node")
+    }
+    #[cfg(not(unix))]
+    {
+        let status = command.status().context("cannot launch bundled node")?;
+        std::process::exit(status.code().unwrap_or(1));
+    }
+}
+
 fn main() {
+    let options = launch::Options::parse();
+    if let Err(error) = options.validate() {
+        eprintln!("{error:#}");
+        std::process::exit(2);
+    }
+    let context = tauri::generate_context!();
+    if options.headless {
+        let result =
+            tauri::utils::platform::resource_dir(context.package_info(), &tauri::Env::default())
+                .map_err(anyhow::Error::from)
+                .and_then(|resources| {
+                    run_headless(&options, resources, &context.config().identifier)
+                });
+        if let Err(error) = result {
+            eprintln!("{error:#}");
+            std::process::exit(1);
+        }
+        return;
+    }
     tauri::Builder::default()
+        .manage(options)
         .manage(Runtime::default())
         .invoke_handler(tauri::generate_handler![
             initialized,
             initialize,
             start_local
         ])
-        .build(tauri::generate_context!())
+        .build(context)
         .expect("failed to build Chorus desktop")
         .run(|app, event| {
             if matches!(event, tauri::RunEvent::Exit)
